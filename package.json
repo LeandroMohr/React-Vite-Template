@@ -3,8 +3,8 @@
     "version": "1.0.0",
     "type": "module",
     "author": {
-        "name": "Cristiano Raimondi",
-        "url": "https://github.com/chrisuser"
+        "name": "Leandro Mohr",
+        "url": "https://github.com/LeandroMohr"
     },
     "dependencies": {
         "@reduxjs/toolkit": "^2.5.0",
