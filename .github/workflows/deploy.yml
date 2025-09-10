@@ -1,16 +1,19 @@
-name: Deploy React Vite to S3 + CloudFront
+name: Build & Deploy (Vite → S3 + CloudFront)
 
 on:
   push:
     branches:
       - main
+      - homolog
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -19,10 +22,10 @@ jobs:
           node-version: 20
           cache: 'yarn'
 
-      - name: Install dependencies
+      - name: Install deps
         run: yarn install --frozen-lockfile
 
-      - name: Build project
+      - name: Build
         run: yarn build
 
       - name: Configure AWS credentials
@@ -32,13 +35,34 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-      - name: Sync build to S3
+      - name: Deploy to S3 and invalidate CloudFront
+        env:
+          S3_BUCKET_PROD: ${{ secrets.S3_BUCKET_PROD }}
+          CF_PROD_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+          S3_BUCKET_HOMOLOG: ${{ secrets.S3_BUCKET_HOMOLOG }}
+          CF_HOMOLOG_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
-          aws s3 sync dist/ s3://${{ secrets.S3_BUCKET_NAME }} --delete --cache-control "public, max-age=31536000, immutable" --exclude index.html
-          aws s3 cp dist/index.html s3://${{ secrets.S3_BUCKET_NAME }}/index.html --cache-control "no-cache, no-store, must-revalidate"
+          BRANCH="${GITHUB_REF##*/}"
+          echo "Branch detected: $BRANCH"
 
-      - name: Invalidate CloudFront cache
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/*"
+          if [ "$BRANCH" = "main" ]; then
+            BUCKET="$S3_BUCKET_PROD"
+            DIST_ID="$CF_PROD_ID"
+            echo "Deploying to production bucket: $BUCKET"
+          else
+            BUCKET="$S3_BUCKET_HOMOLOG"
+            DIST_ID="$CF_HOMOLOG_ID"
+            echo "Deploying to homolog bucket: $BUCKET"
+          fi
+
+          # Upload assets except index.html (long-term cache)
+          aws s3 sync build/ s3://$BUCKET --delete --exclude "index.html" \
+            --cache-control "public, max-age=31536000, immutable"
+
+          # Upload index.html with no-cache so clients always fetch the newest HTML
+          aws s3 cp build/index.html s3://$BUCKET/index.html \
+            --content-type "text/html; charset=utf-8" \
+            --cache-control "no-store, must-revalidate"
+
+          # Smart CloudFront invalidation (invalidate only index.html)
+          aws cloudfront create-invalidation --distribution-id $DIST_ID --paths "/index.html"
